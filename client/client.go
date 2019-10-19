@@ -32,6 +32,7 @@ import (
 
 var (
 	myFqdn      = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).String()
+	scrapeTargetHost  = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
 	proxyURL    = kingpin.Flag("proxy-url", "Push proxy to talk to.").Required().String()
 	caCertFile  = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
 	tlsCert     = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
@@ -146,6 +147,13 @@ func (c *Coordinator) doPush(resp *http.Response, origRequest *http.Request, cli
 	return nil
 }
 
+// replaceUrlHost will replace the host in the url with the scrapeTargetHost
+func replaceUrlHost(url *url.URL) *url.URL {
+	_, port, _ := net.SplitHostPort(url.Host)
+	url.Host = fmt.Sprintf("%s:%s", *scrapeTargetHost, port)
+	return url
+}
+
 func loop(c Coordinator, t *http.Transport) error {
 	client := &http.Client{Transport: t}
 	base, err := url.Parse(*proxyURL)
@@ -174,6 +182,10 @@ func loop(c Coordinator, t *http.Transport) error {
 	level.Info(c.logger).Log("msg", "Got scrape request", "scrape_id", request.Header.Get("id"), "url", request.URL)
 
 	request.RequestURI = ""
+
+	if *scrapeTargetHost != "" {
+		request.URL = replaceUrlHost(request.URL)
+	}
 
 	go c.doScrape(request, client)
 
