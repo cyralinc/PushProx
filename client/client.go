@@ -185,6 +185,7 @@ func loop(c Coordinator, t *http.Transport) error {
 
 	if *scrapeTargetHost != "" {
 		request.URL = replaceUrlHost(request.URL)
+		level.Info(c.logger).Log("msg", "Modified scrape target", "scrape_id", request.Header.Get("id"), "url", request.URL)
 	}
 
 	go c.doScrape(request, client)
