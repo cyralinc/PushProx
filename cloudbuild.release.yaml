@@ -1,0 +1,97 @@
+steps:
+# Download the cicd key
+- name: 'gcr.io/cloud-builders/gsutil'
+  args:
+  - cp
+  - gs://cyral-keys/cicd_key.enc
+  - ./id_cicd.enc
+  id: 'get-cicd-key'
+
+# Decrypt the cicd key
+- name: 'gcr.io/cloud-builders/gcloud'
+  args:
+  - kms
+  - decrypt
+  - --ciphertext-file=id_cicd.enc
+  - --plaintext-file=/root/.ssh/id_rsa
+  - --location=global
+  - --keyring=github-keyring
+  - --key=github-key
+  id: 'decrypt-cicd-key'
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+
+# Set up git with key and domain.
+- name: 'gcr.io/cloud-builders/git'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    chmod 600 /root/.ssh/id_rsa
+    cat <<EOF >/root/.ssh/config
+    Hostname github.com
+    IdentityFile /root/.ssh/id_rsa
+    StrictHostKeyChecking no
+    EOF
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'ssh-config'
+
+# Ask git to use ssh instead of https
+- name: 'gcr.io/cloud-builders/git'
+  args:
+  - config
+  - --global
+  - url.git@github.com:.insteadOf
+  - https://github.com/
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'git-config'
+
+# Run unit tests
+- name: golang
+  env:
+  - 'PROJECT_ROOT=github.com/cyralinc/PushProx'
+  - 'GO111MODULE=on'
+  args:
+  - go
+  - test
+  - -race
+  - ./...
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'unit-tests'
+  waitFor: ['git-config']
+
+# Build binary
+- name: golang:alpine
+  entrypoint: 'ash'
+  env:
+  - 'PROJECT_ROOT=github.com/cyralinc/PushProx'
+  - 'GO111MODULE=on'
+  - 'CGOENABLED=0'
+  - 'GOBIN=/workspace/bin'
+  args:
+  - '-c'
+  - |
+    apk add --no-cache ca-certificates git openssh
+    mkdir /workspace/bin
+    go build ./...
+    mv client /workspace/bin
+    mv proxy /workspace/bin
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'go-build-binary'
+  waitFor: ['git-config']
+
+# Build container image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME', '.']
+  id: 'docker-build'
+
+images: ['gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME']
