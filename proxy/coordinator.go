@@ -102,10 +102,22 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	}
 	level.Info(c.logger).Log("msg", "DoScrape", "scrape_id", id, "url", r.URL.String())
 	r.Header.Add("Id", id)
+
+	//PC: URL.Hostname() will be of form sevicename.wrappername
+	//split this and use the wrappername for request channel 	
+	//modify request URL to servicename
+	serviceWrapper := r.URL.Hostname()
+	fqdn := serviceWrapper
+	b := strings.split(serviceWrapper, ".")
+	if len(b) == 2 {
+		fqdn = b[1]
+		r.URL = replaceUrlHost(r.URL, b[0])
+	} 
+
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("Timeout reached for %q: %s", r.URL.String(), ctx.Err())
-	case c.getRequestChannel(r.URL.Hostname()) <- r:
+	case c.getRequestChannel(fqdn) <- r:
 	}
 
 	respCh := c.getResponseChannel(id)

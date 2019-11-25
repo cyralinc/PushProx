@@ -148,9 +148,9 @@ func (c *Coordinator) doPush(resp *http.Response, origRequest *http.Request, cli
 }
 
 // replaceUrlHost will replace the host in the url with the scrapeTargetHost
-func replaceUrlHost(url *url.URL) *url.URL {
+func replaceUrlHost(url *url.URL, newhost string) *url.URL {
 	_, port, _ := net.SplitHostPort(url.Host)
-	url.Host = fmt.Sprintf("%s:%s", *scrapeTargetHost, port)
+	url.Host = fmt.Sprintf("%s:%s", newhost, port)
 	return url
 }
 
@@ -184,7 +184,7 @@ func loop(c Coordinator, t *http.Transport) error {
 	request.RequestURI = ""
 
 	if *scrapeTargetHost != "" {
-		request.URL = replaceUrlHost(request.URL)
+		request.URL = replaceUrlHost(request.URL, *scrapeTargetHost)
 		level.Info(c.logger).Log("msg", "Modified scrape target", "scrape_id", request.Header.Get("id"), "url", request.URL)
 	}
 
