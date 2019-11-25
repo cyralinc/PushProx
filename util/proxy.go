@@ -1,7 +1,10 @@
 package util
 
 import (
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -25,4 +28,11 @@ func GetHeaderTimeout(h http.Header) (time.Duration, error) {
 	}
 
 	return time.Duration(timeoutSeconds * 1e9), nil
+}
+
+// ReplaceUrlHost will replace the host in the url with the scrapeTargetHost
+func ReplaceUrlHost(url *url.URL, newhost string) *url.URL {
+	_, port, _ := net.SplitHostPort(url.Host)
+	url.Host = fmt.Sprintf("%s:%s", newhost, port)
+	return url
 }

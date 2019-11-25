@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,15 +105,15 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	r.Header.Add("Id", id)
 
 	//PC: URL.Hostname() will be of form sevicename.wrappername
-	//split this and use the wrappername for request channel 	
+	//split this and use the wrappername for request channel
 	//modify request URL to servicename
 	serviceWrapper := r.URL.Hostname()
 	fqdn := serviceWrapper
-	b := strings.split(serviceWrapper, ".")
+	b := strings.Split(serviceWrapper, ".")
 	if len(b) == 2 {
 		fqdn = b[1]
-		r.URL = replaceUrlHost(r.URL, b[0])
-	} 
+		r.URL = util.ReplaceUrlHost(r.URL, b[0])
+	}
 
 	select {
 	case <-ctx.Done():

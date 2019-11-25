@@ -31,13 +31,13 @@ import (
 )
 
 var (
-	myFqdn      = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).String()
-	scrapeTargetHost  = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
-	proxyURL    = kingpin.Flag("proxy-url", "Push proxy to talk to.").Required().String()
-	caCertFile  = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
-	tlsCert     = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
-	tlsKey      = kingpin.Flag("tls.key", "<key> Private key file").String()
-	metricsAddr = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
+	myFqdn           = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).String()
+	scrapeTargetHost = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
+	proxyURL         = kingpin.Flag("proxy-url", "Push proxy to talk to.").Required().String()
+	caCertFile       = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
+	tlsCert          = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
+	tlsKey           = kingpin.Flag("tls.key", "<key> Private key file").String()
+	metricsAddr      = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
 )
 
 var (
@@ -147,13 +147,6 @@ func (c *Coordinator) doPush(resp *http.Response, origRequest *http.Request, cli
 	return nil
 }
 
-// replaceUrlHost will replace the host in the url with the scrapeTargetHost
-func replaceUrlHost(url *url.URL, newhost string) *url.URL {
-	_, port, _ := net.SplitHostPort(url.Host)
-	url.Host = fmt.Sprintf("%s:%s", newhost, port)
-	return url
-}
-
 func loop(c Coordinator, t *http.Transport) error {
 	client := &http.Client{Transport: t}
 	base, err := url.Parse(*proxyURL)
@@ -184,7 +177,7 @@ func loop(c Coordinator, t *http.Transport) error {
 	request.RequestURI = ""
 
 	if *scrapeTargetHost != "" {
-		request.URL = replaceUrlHost(request.URL, *scrapeTargetHost)
+		request.URL = util.ReplaceUrlHost(request.URL, *scrapeTargetHost)
 		level.Info(c.logger).Log("msg", "Modified scrape target", "scrape_id", request.Header.Get("id"), "url", request.URL)
 	}
 
