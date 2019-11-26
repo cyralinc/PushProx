@@ -27,7 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
-	"github.com/robustperception/pushprox/util"
+	"github.com/cyralinc/pushprox/util"
 )
 
 var (

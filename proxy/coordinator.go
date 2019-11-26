@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/robustperception/pushprox/util"
+	"github.com/cyralinc/pushprox/util"
 )
 
 var (

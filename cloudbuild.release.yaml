@@ -80,9 +80,8 @@ steps:
   - |
     apk add --no-cache ca-certificates git openssh
     mkdir /workspace/bin
-    go build ./...
-    mv client /workspace/bin
-    mv proxy /workspace/bin
+    go build -o /workspace/bin/client ./client
+    go build -o /workspace/bin/proxy ./proxy
   volumes:
   - name: 'ssh'
     path: /root/.ssh
