@@ -113,6 +113,7 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	if len(b) == 2 {
 		fqdn = b[1]
 		r.URL = util.ReplaceUrlHost(r.URL, b[0])
+		r.Host = r.URL.Host
 	}
 
 	select {
