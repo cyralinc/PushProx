@@ -1,4 +1,4 @@
-module github.com/robustperception/pushprox
+module github.com/cyralinc/pushprox
 
 go 1.12
 
