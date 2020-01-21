@@ -25,13 +25,17 @@ import (
 )
 
 const (
-	namespace = "pushprox_proxy" // For Prometheus metrics.
+	namespace                     = "pushprox_proxy" // For Prometheus metrics.
+	ConfigWebListenAddressDefault = ":8050"
+	ConfigFilePath                = "config-proxy.yaml"
+	EnvWebListenAddress           = "CYRAL_PUSH_PROXY_WEB_LISTEN_ADDR"
 )
 
 var (
-	listenAddress        = kingpin.Flag("web.listen-address", "Address to listen on for proxy and client requests.").Default(":8080").String()
+	listenAddress        = kingpin.Flag("web.listen-address", "Address to listen on for proxy and client requests.").Default(":8080").OverrideDefaultFromEnvar(EnvWebListenAddress).String()
 	maxScrapeTimeout     = kingpin.Flag("scrape.max-timeout", "Any scrape with a timeout higher than this will have to be clamped to this.").Default("5m").Duration()
 	defaultScrapeTimeout = kingpin.Flag("scrape.default-timeout", "If a scrape lacks a timeout, use this value.").Default("15s").Duration()
+	configFilePath       = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
 )
 
 var (
