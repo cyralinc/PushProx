@@ -1,0 +1,2 @@
+fqdn: "default-fqdn"
+proxy-url: "http://invalid-url-from-env:8050"
