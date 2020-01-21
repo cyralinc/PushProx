@@ -18,26 +18,33 @@ import (
 	"strings"
 	"time"
 
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
-
 	"github.com/ShowMax/go-fqdn"
+	"github.com/cyralinc/pushprox/util"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
-	"github.com/cyralinc/pushprox/util"
+	"gopkg.in/alecthomas/kingpin.v2"
+)
+
+const (
+	ConfigPushClientDefaultValue = "http://pushproxy.cyral:8050"
+	ConfigFilePath               = "config-client.yaml"
+	EnvFqdnKey                   = "CYRAL_PUSH_CLIENT_FQDN"
+	EnvProxyURL                  = "CYRAL_PUSH_CLIENT_PROXY_URL"
 )
 
 var (
-	myFqdn           = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).String()
+	myFqdn           = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).OverrideDefaultFromEnvar(EnvFqdnKey).String()
 	scrapeTargetHost = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
-	proxyURL         = kingpin.Flag("proxy-url", "Push proxy to talk to.").Required().String()
+	proxyURL         = kingpin.Flag("proxy-url", "Push proxy to talk to.").Default(ConfigPushClientDefaultValue).OverrideDefaultFromEnvar(EnvProxyURL).String()
 	caCertFile       = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
 	tlsCert          = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
 	tlsKey           = kingpin.Flag("tls.key", "<key> Private key file").String()
 	metricsAddr      = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
+	configFilePath   = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
 )
 
 var (
