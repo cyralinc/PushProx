@@ -1,2 +1,2 @@
-fqdn: "default-fqdn"
-proxy-url: "http://invalid-url-from-env:8050"
+fqdn: ${CYRAL_WRAPPER_NAME}
+proxy-url: "http://localhost:8050"

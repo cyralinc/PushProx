@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	ConfigPushClientDefaultValue = "http://pushproxy.cyral:8050"
+	ConfigPushClientDefaultValue = "http://localhost:8050"
 	ConfigFilePath               = "config-client.yaml"
 	EnvFqdnKey                   = "CYRAL_PUSH_CLIENT_FQDN"
 	EnvProxyURL                  = "CYRAL_PUSH_CLIENT_PROXY_URL"
