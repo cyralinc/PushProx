@@ -1,2 +1,2 @@
-fqdn: ${CYRAL_WRAPPER_NAME}
+fqdn: ${CYRAL_SIDECAR_NAME}
 proxy-url: "http://localhost:8050"
