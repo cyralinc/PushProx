@@ -1,0 +1,298 @@
+steps:
+# Download the cicd key
+- name: 'gcr.io/cloud-builders/gsutil'
+  args:
+  - cp
+  - gs://cyral-keys/cicd_key.enc
+  - ./id_cicd.enc
+  id: 'get-cicd-key'
+
+# Decrypt the cicd key
+- name: 'gcr.io/cloud-builders/gcloud'
+  args:
+  - kms
+  - decrypt
+  - --ciphertext-file=id_cicd.enc
+  - --plaintext-file=/root/.ssh/id_rsa
+  - --location=global
+  - --keyring=github-keyring
+  - --key=github-key
+  id: 'decrypt-cicd-key'
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+
+# Set up git with key and domain.
+- name: 'gcr.io/cloud-builders/git'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    chmod 600 /root/.ssh/id_rsa
+    cat <<EOF >/root/.ssh/config
+    Hostname github.com
+    IdentityFile /root/.ssh/id_rsa
+    StrictHostKeyChecking no
+    EOF
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'ssh-config'
+
+# Ask git to use ssh instead of https
+- name: 'gcr.io/cloud-builders/git'
+  args:
+  - config
+  - --global
+  - url.git@github.com:.insteadOf
+  - https://github.com/
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'git-config'
+
+# Run unit tests
+- name: golang
+  env:
+  - 'PROJECT_ROOT=github.com/cyralinc/PushProx'
+  - 'GO111MODULE=on'
+  args:
+  - go
+  - test
+  - -race
+  - ./...
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'unit-tests'
+  waitFor: ['git-config']
+
+# Build binary
+- name: golang:alpine
+  entrypoint: 'ash'
+  env:
+  - 'PROJECT_ROOT=github.com/cyralinc/PushProx'
+  - 'GO111MODULE=on'
+  - 'CGOENABLED=0'
+  - 'GOBIN=/workspace/bin'
+  args:
+  - '-c'
+  - |
+    apk add --no-cache ca-certificates git openssh
+    mkdir /workspace/bin
+    go build -o /workspace/bin/client ./client
+    go build -o /workspace/bin/proxy ./proxy
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  id: 'go-build-binary'
+  waitFor: ['git-config']
+
+# Build container image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME', '.']
+  id: 'docker-build'
+
+# Build client binary for rpm and debian
+- name: gcr.io/cloud-builders/go:debian
+  entrypoint: 'bash'
+  env:
+  - 'PROJECT_ROOT=github.com/cyralinc/PushProx'
+  - 'GO111MODULE=on'
+  - 'CGOENABLED=0'
+  - 'GOBIN=/workspace/bin'
+  - 'GOPATH=/go'
+  args:
+  - '-c'
+  - |
+    mkdir /workspace/bin
+    go build -o /go/bin/cyral-push-client ./client
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'go-modules'
+    path: /go
+  id: 'go-build-binary-debian-client'
+  waitFor: ['unit-tests']
+
+# Build proxy binary for rpm and debian
+- name: gcr.io/cloud-builders/go:debian
+  entrypoint: 'bash'
+  env:
+  - 'PROJECT_ROOT=github.com/cyralinc/PushProx'
+  - 'GO111MODULE=on'
+  - 'CGOENABLED=0'
+  - 'GOBIN=/workspace/bin'
+  - 'GOPATH=/go'
+  args:
+  - '-c'
+  - |
+    mkdir /workspace/bin
+    go build -o /go/bin/cyral-push-proxy ./proxy
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'go-modules'
+    path: /go
+  id: 'go-build-binary-debian-proxy'
+  waitFor: ['unit-tests']
+
+# Get the tools for creating rpm
+- name: 'gcr.io/cloud-builders/git'
+  args:
+  - clone
+  - 'git@github.com:cyralinc/build-tools.git'
+  - /root/scripts
+  id: 'git-clone'
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'scripts'
+    path: /root/scripts
+  waitFor: ['git-config']
+
+# Build the rpm configuration for client
+- name: 'gcr.io/$PROJECT_ID/build-tools:python-3.6'
+  args:
+  - /root/scripts/gen_config.py
+  - --config_file=/workspace/client-config.yaml
+  - --service_name=cyral-push-client
+  - --systemd_description=Cyral Push Client
+  - --env_file=/workspace/client-env.yaml
+  - --working_dir=/root/scripts
+  - --output_dir=/root/systemd-client
+  id: 'systemd-config-generation-client'
+  volumes:
+  - name: 'scripts'
+    path: /root/scripts
+  - name: 'systemd-client'
+    path: /root/systemd-client
+
+# Build the rpm configuration for proxy
+- name: 'gcr.io/$PROJECT_ID/build-tools:python-3.6'
+  args:
+  - /root/scripts/gen_config.py
+  - --config_file=/workspace/proxy-config.yaml
+  - --service_name=cyral-push-proxy
+  - --systemd_description=Cyral Push Proxy
+  - --env_file=/workspace/proxy-env.yaml
+  - --working_dir=/root/scripts
+  - --output_dir=/root/systemd-proxy
+  id: 'systemd-config-generation-proxy'
+  volumes:
+  - name: 'scripts'
+    path: /root/scripts
+  - name: 'systemd-proxy'
+    path: /root/systemd-proxy
+
+# Build rpm of client
+- name: 'gcr.io/$PROJECT_ID/build-tools:rpm'
+  env:
+  - 'FPM_TARGET=/workspace/bin/cyral-push-client.$TAG_NAME.rpm'
+  - 'TARGET_NAME=cyral-push-client'
+  - 'SYSTEMD_FILES_PATH=/root/systemd-client/cyral-push-client'
+  - 'PKGNAME=cyral-push-client'
+  - 'DESC=Cyral Push Client Service'
+  - 'SKIP_GO_BUILD=true'
+  - 'GO_TARGET_PATH=/go/bin'
+  entrypoint: 'bash'
+  args:
+  - /root/scripts/rpm/build.rpm.sh
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'scripts'
+    path: /root/scripts
+  - name: 'systemd-client'
+    path: /root/systemd-client
+  - name: 'go-modules'
+    path: /go
+  id: 'rpm-build-client'
+  waitFor: ['systemd-config-generation-client']
+
+# Build rpm of proxy
+- name: 'gcr.io/$PROJECT_ID/build-tools:rpm'
+  env:
+  - 'FPM_TARGET=/workspace/bin/cyral-push-proxy.$TAG_NAME.rpm'
+  - 'TARGET_NAME=cyral-push-proxy'
+  - 'SYSTEMD_FILES_PATH=/root/systemd-proxy/cyral-push-proxy'
+  - 'PKGNAME=cyral-push-proxy'
+  - 'DESC=Cyral Push Proxy Service'
+  - 'SKIP_GO_BUILD=true'
+  - 'GO_TARGET_PATH=/go/bin'
+  entrypoint: 'bash'
+  args:
+  - /root/scripts/rpm/build.rpm.sh
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'scripts'
+    path: /root/scripts
+  - name: 'systemd-proxy'
+    path: /root/systemd-proxy
+  - name: 'go-modules'
+    path: /go
+  id: 'rpm-build-proxy'
+  waitFor: ['systemd-config-generation-proxy']
+
+# Build deb of client
+- name: 'gcr.io/$PROJECT_ID/build-tools:rpm'
+  env:
+  - 'FPM_TARGET=/workspace/bin/cyral-push-client.$TAG_NAME.deb'
+  - 'TARGET_NAME=cyral-push-client'
+  - 'SYSTEMD_FILES_PATH=/root/systemd-client/cyral-push-client'
+  - 'PKGNAME=cyral-push-client'
+  - 'DESC=Cyral Push Client Service'
+  - 'PKG_TYPE=deb'
+  - 'SKIP_GO_BUILD=true'
+  - 'GO_TARGET_PATH=/go/bin'
+  entrypoint: 'bash'
+  args:
+  - /root/scripts/rpm/build.rpm.sh
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'scripts'
+    path: /root/scripts
+  - name: 'systemd-client'
+    path: /root/systemd-client
+  - name: 'go-modules'
+    path: /go
+  id: 'deb-build-client'
+  waitFor: ['systemd-config-generation-client']
+
+# Build deb of proxy
+- name: 'gcr.io/$PROJECT_ID/build-tools:rpm'
+  env:
+  - 'FPM_TARGET=/workspace/bin/cyral-push-proxy.$TAG_NAME.deb'
+  - 'TARGET_NAME=cyral-push-proxy'
+  - 'SYSTEMD_FILES_PATH=/root/systemd-proxy/cyral-push-proxy'
+  - 'PKGNAME=cyral-push-proxy'
+  - 'DESC=Cyral Push Proxy Service'
+  - 'PKG_TYPE=deb'
+  - 'SKIP_GO_BUILD=true'
+  - 'GO_TARGET_PATH=/go/bin'
+  entrypoint: 'bash'
+  args:
+  - /root/scripts/rpm/build.rpm.sh
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+  - name: 'scripts'
+    path: /root/scripts
+  - name: 'systemd-proxy'
+    path: /root/systemd-proxy
+  - name: 'go-modules'
+    path: /go
+  id: 'deb-build-proxy'
+  waitFor: ['systemd-config-generation-proxy']
+
+artifacts:
+  objects:
+    location: gs://cyral-artifacts-dev/cyral-push-client/
+    paths:
+      - "/workspace/bin/cyral-push-client.$TAG_NAME.rpm"
+      - "/workspace/bin/cyral-push-client.$TAG_NAME.deb"
+      - "/workspace/bin/cyral-push-proxy.$TAG_NAME.rpm"
+      - "/workspace/bin/cyral-push-proxy.$TAG_NAME.deb"
+images: ['gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME']

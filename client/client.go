@@ -17,9 +17,8 @@ import (
 	"strings"
 	"time"
 
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
-
 	"github.com/ShowMax/go-fqdn"
+	"github.com/cyralinc/pushprox/util"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
@@ -27,16 +26,25 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
-	"github.com/robustperception/pushprox/util"
+	"gopkg.in/alecthomas/kingpin.v2"
+)
+
+const (
+	ConfigPushClientDefaultValue = "http://localhost:8050"
+	ConfigFilePath               = "config-client.yaml"
+	EnvFqdnKey                   = "CYRAL_PUSH_CLIENT_FQDN"
+	EnvProxyURL                  = "CYRAL_PUSH_CLIENT_PROXY_URL"
 )
 
 var (
-	myFqdn      = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).String()
-	proxyURL    = kingpin.Flag("proxy-url", "Push proxy to talk to.").Required().String()
-	caCertFile  = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
-	tlsCert     = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
-	tlsKey      = kingpin.Flag("tls.key", "<key> Private key file").String()
-	metricsAddr = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
+	myFqdn           = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).OverrideDefaultFromEnvar(EnvFqdnKey).String()
+	scrapeTargetHost = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
+	proxyURL         = kingpin.Flag("proxy-url", "Push proxy to talk to.").Default(ConfigPushClientDefaultValue).OverrideDefaultFromEnvar(EnvProxyURL).String()
+	caCertFile       = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
+	tlsCert          = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
+	tlsKey           = kingpin.Flag("tls.key", "<key> Private key file").String()
+	metricsAddr      = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
+	configFilePath   = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
 )
 
 var (
@@ -188,6 +196,11 @@ func loop(c Coordinator, client *http.Client) error {
 	level.Info(c.logger).Log("msg", "Got scrape request", "scrape_id", request.Header.Get("id"), "url", request.URL)
 
 	request.RequestURI = ""
+
+	if *scrapeTargetHost != "" {
+		request.URL = util.ReplaceUrlHost(request.URL, *scrapeTargetHost)
+		level.Info(c.logger).Log("msg", "Modified scrape target", "scrape_id", request.Header.Get("id"), "url", request.URL)
+	}
 
 	go c.doScrape(request, client)
 

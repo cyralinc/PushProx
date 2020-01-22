@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/robustperception/pushprox/util"
+	"github.com/cyralinc/pushprox/util"
 )
 
 var (
@@ -102,10 +103,23 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	}
 	level.Info(c.logger).Log("msg", "DoScrape", "scrape_id", id, "url", r.URL.String())
 	r.Header.Add("Id", id)
+
+	//PC: URL.Hostname() will be of form sevicename.wrappername
+	//split this and use the wrappername for request channel
+	//modify request URL to servicename
+	serviceWrapper := r.URL.Hostname()
+	fqdn := serviceWrapper
+	b := strings.Split(serviceWrapper, ".")
+	if len(b) == 2 {
+		fqdn = b[1]
+		r.URL = util.ReplaceUrlHost(r.URL, b[0])
+		r.Host = r.URL.Host
+	}
+
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("Timeout reached for %q: %s", r.URL.String(), ctx.Err())
-	case c.getRequestChannel(r.URL.Hostname()) <- r:
+	case c.getRequestChannel(fqdn) <- r:
 	}
 
 	respCh := c.getResponseChannel(id)
