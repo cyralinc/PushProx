@@ -203,9 +203,9 @@ type decorrelatedJitter struct {
 func newJitter() decorrelatedJitter {
 	rand.Seed(time.Now().UnixNano())
 	return decorrelatedJitter{
-		duration: 1,
-		min:      1,
-		cap:      10,
+		duration: 15e9,
+		min:      15e9, //15s
+		cap:      30e9,
 	}
 }
 
@@ -214,6 +214,7 @@ func (d *decorrelatedJitter) calc() {
 }
 
 func (d *decorrelatedJitter) sleep() {
+	d.calc()
 	time.Sleep(time.Duration(d.duration))
 }
 
