@@ -10,12 +10,12 @@ import (
 
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 
+	"github.com/cyralinc/pushprox/util"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/cyralinc/pushprox/util"
 )
 
 var (
@@ -141,13 +141,17 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 	// TODO: What if the client times out?
 	ch := c.getRequestChannel(fqdn)
 
-	// exhaust existing poll request (eg. timeouted queues)
-	select {
-	case ch <- nil:
-		//
-	default:
-		break
-	}
+	// Following logic to null past request is not required,
+	// This existed based on the assumption that there will be just
+	// one client polling on a certain fqdn. we have other requirements with asg
+
+	//// exhaust existing poll request (eg. timeouted queues)
+	//select {
+	//case ch <- nil:
+	//	//
+	//default:
+	//	break
+	//}
 
 	for {
 		request := <-ch
