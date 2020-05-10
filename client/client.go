@@ -207,6 +207,26 @@ func loop(c Coordinator, client *http.Client) error {
 	return nil
 }
 
+// generates delay in a range
+type variationDelay struct {
+	min float64
+	max float64
+}
+
+// newVariationDelay constructs variationDelay object with a range
+func newVariationDelay() variationDelay {
+	return variationDelay{
+		min: 5e8,  //500ms
+		max: 20e9, //20s
+	}
+}
+
+// sleep will sleep for a random duration between
+func (v *variationDelay) sleep() {
+	d := math.Min(v.max, v.min+(rand.Float64()*v.max))
+	time.Sleep(time.Duration(d))
+}
+
 // decorrelated Jitter increases the maximum jitter based on the last random value.
 type decorrelatedJitter struct {
 	duration float64 // sleep time
@@ -215,7 +235,6 @@ type decorrelatedJitter struct {
 }
 
 func newJitter() decorrelatedJitter {
-	rand.Seed(time.Now().UnixNano())
 	return decorrelatedJitter{
 		duration: 15e9,
 		min:      15e9, //15s
@@ -298,6 +317,8 @@ func main() {
 		TLSClientConfig:       tlsConfig,
 	}
 
+	rand.Seed(time.Now().UnixNano())
+	variationDelay := newVariationDelay()
 	jitter := newJitter()
 	client := &http.Client{Transport: transport}
 	for {
@@ -307,5 +328,6 @@ func main() {
 			jitter.sleep()
 			continue
 		}
+		variationDelay.sleep()
 	}
 }
