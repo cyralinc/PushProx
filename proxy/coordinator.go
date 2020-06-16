@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ type Coordinator struct {
 	mu sync.Mutex
 
 	// Clients waiting for a scrape.
-	waiting map[string]chan *http.Request
+	waiting map[string]map[string]chan *http.Request
 	// Responses from clients.
 	responses map[string]chan *http.Response
 	// Clients we know about and when they last contacted us.
@@ -50,7 +51,7 @@ type Coordinator struct {
 // NewCoordinator initiates the coordinator and starts the client cleanup routine
 func NewCoordinator(logger log.Logger) (*Coordinator, error) {
 	c := &Coordinator{
-		waiting:   map[string]chan *http.Request{},
+		waiting:   map[string]map[string]chan *http.Request{},
 		responses: map[string]chan *http.Response{},
 		known:     map[string]time.Time{},
 		logger:    logger,
@@ -66,15 +67,32 @@ func (c *Coordinator) genID() (string, error) {
 	return id.String(), err
 }
 
-func (c *Coordinator) getRequestChannel(fqdn string) chan *http.Request {
+func (c *Coordinator) getRandomlySelectedRequestChannel(fqdn string) (chan *http.Request, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ch, ok := c.waiting[fqdn]
-	if !ok {
-		ch = make(chan *http.Request)
-		c.waiting[fqdn] = ch
+	if _, ok := c.waiting[fqdn]; !ok {
+		//no requests from prometheus yet
+		return nil, fmt.Errorf("no requests from prometheus yet for fqdn %s", fqdn)
 	}
-	return ch
+	var serviceList []string
+	for s := range c.waiting[fqdn] {
+		serviceList = append(serviceList, s)
+	}
+	r := rand.Intn(len(serviceList))
+	service := serviceList[r]
+	return c.waiting[fqdn][service], nil
+}
+
+func (c *Coordinator) getPerServiceRequestChannel(sidecar string, service string) chan *http.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.waiting[sidecar]; !ok {
+		c.waiting[sidecar] = make(map[string]chan *http.Request)
+	}
+	if _, ok := c.waiting[sidecar][service]; !ok {
+		c.waiting[sidecar][service] = make(chan *http.Request)
+	}
+	return c.waiting[sidecar][service]
 }
 
 func (c *Coordinator) getResponseChannel(id string) chan *http.Response {
@@ -109,17 +127,19 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	//modify request URL to servicename
 	serviceWrapper := r.URL.Hostname()
 	fqdn := serviceWrapper
+	service := ""
 	b := strings.Split(serviceWrapper, ".")
 	if len(b) == 2 {
+		service = b[0]
 		fqdn = b[1]
-		r.URL = util.ReplaceUrlHost(r.URL, b[0])
+		r.URL = util.ReplaceUrlHost(r.URL, service)
 		r.Host = r.URL.Host
 	}
 
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("Timeout reached for %q: %s", r.URL.String(), ctx.Err())
-	case c.getRequestChannel(fqdn) <- r:
+	case c.getPerServiceRequestChannel(fqdn, service) <- r:
 	}
 
 	respCh := c.getResponseChannel(id)
@@ -139,19 +159,11 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 
 	c.addKnownClient(fqdn)
 	// TODO: What if the client times out?
-	ch := c.getRequestChannel(fqdn)
-
-	// Following logic to null past request is not required,
-	// This existed based on the assumption that there will be just
-	// one client polling on a certain fqdn. we have other requirements with asg
-
-	//// exhaust existing poll request (eg. timeouted queues)
-	//select {
-	//case ch <- nil:
-	//	//
-	//default:
-	//	break
-	//}
+	ch, err := c.getRandomlySelectedRequestChannel(fqdn)
+	if err != nil {
+		level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "error", err)
+		return nil, err
+	}
 
 	for {
 		request := <-ch
