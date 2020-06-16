@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,8 +36,11 @@ var (
 
 // Coordinator for scrape requests and responses
 type Coordinator struct {
-	mu sync.Mutex
+	mu          sync.Mutex
+	muInstances sync.Mutex
 
+	// Clients (per instance, per sidecar)
+	instancesWaiting map[string]map[string]chan *http.Request
 	// Clients waiting for a scrape.
 	waiting map[string]chan *http.Request
 	// Responses from clients.
@@ -50,13 +54,15 @@ type Coordinator struct {
 // NewCoordinator initiates the coordinator and starts the client cleanup routine
 func NewCoordinator(logger log.Logger) (*Coordinator, error) {
 	c := &Coordinator{
-		waiting:   map[string]chan *http.Request{},
-		responses: map[string]chan *http.Response{},
-		known:     map[string]time.Time{},
-		logger:    logger,
+		instancesWaiting: map[string]map[string]chan *http.Request{},
+		waiting:          map[string]chan *http.Request{},
+		responses:        map[string]chan *http.Response{},
+		known:            map[string]time.Time{},
+		logger:           logger,
 	}
 
 	go c.gc()
+	go c.evenlyDistributeScrapeRequests()
 	return c, nil
 }
 
@@ -64,6 +70,39 @@ func NewCoordinator(logger log.Logger) (*Coordinator, error) {
 func (c *Coordinator) genID() (string, error) {
 	id, err := uuid.NewRandom()
 	return id.String(), err
+}
+
+func (c *Coordinator) getPerInstanceRequestChannel(instance, sidecar string) chan *http.Request {
+	c.muInstances.Lock()
+	defer c.muInstances.Unlock()
+	if _, ok := c.instancesWaiting[sidecar]; !ok {
+		c.instancesWaiting[sidecar] = make(map[string]chan *http.Request)
+	}
+	ch, ok := c.instancesWaiting[sidecar][instance]
+	if !ok {
+		ch = make(chan *http.Request)
+		c.instancesWaiting[sidecar][instance] = ch
+	}
+	return ch
+}
+
+func (c *Coordinator) cleanUpPerInstanceRequestChannels(fqdn string) {
+	instance, sidecar, err := splitFqdnIntoInstanceAndSidecar(fqdn)
+	if err != nil {
+		level.Error(c.logger).Log("msg", "cleanUpPerInstanceRequestChannels", err)
+		return
+	}
+	c.muInstances.Lock()
+	defer c.muInstances.Unlock()
+	if _, ok := c.instancesWaiting[sidecar]; ok {
+		c.instancesWaiting[sidecar] = make(map[string]chan *http.Request)
+		if _, ok := c.instancesWaiting[sidecar][instance]; ok {
+			delete(c.instancesWaiting[sidecar], instance)
+		}
+		if len(c.instancesWaiting[sidecar]) == 0 {
+			delete(c.instancesWaiting, sidecar)
+		}
+	}
 }
 
 func (c *Coordinator) getRequestChannel(fqdn string) chan *http.Request {
@@ -93,6 +132,54 @@ func (c *Coordinator) removeResponseChannel(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.responses, id)
+}
+
+func (c *Coordinator) evenlyDistributeScrapeRequests() {
+	randomlyPickInstanceChannel := func(fqdn string) (chan *http.Request, error) {
+		var instanceList []string
+		if instancesMap, ok := c.instancesWaiting[fqdn]; ok {
+			for instance := range instancesMap {
+				instanceList = append(instanceList, instance)
+			}
+			if len(instanceList) != 0 {
+				i := rand.Intn(len(instanceList))
+				instance := instanceList[i]
+				return instancesMap[instance], nil
+			}
+			return nil, fmt.Errorf("failed to find any instance poll request channels for sidecar %s", fqdn)
+		}
+		//unexpected, losing a request here
+		return nil, fmt.Errorf("failed to find any instances for sidecar %s", fqdn)
+	}
+
+	for {
+		// first check if a poll channels have been created
+		// poll channels are created in response to poll requests
+		c.muInstances.Lock()
+		for fqdn := range c.instancesWaiting {
+			ch := c.getRequestChannel(fqdn)
+			// now read request from ch in NB way and push to
+			// a randomly picked poll channel
+			select {
+			case req := <-ch:
+				instanceCh, err := randomlyPickInstanceChannel(fqdn)
+				if err != nil {
+					level.Error(c.logger).Log("msg", "Dropping scrape request due to ", err)
+				}
+				if instanceCh != nil {
+					instanceCh <- req
+				} else {
+					level.Error(c.logger).Log("msg", "Dropping scrape request due to nil instance channel for sidecar ", fqdn)
+				}
+			default:
+				//non-blocking
+			}
+		}
+		c.muInstances.Unlock()
+		// prometheus requests come at frequency of about 15s
+		// to avoid spinning sleep here
+		time.Sleep(1 * time.Second)
+	}
 }
 
 // DoScrape requests a scrape.
@@ -133,20 +220,34 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	}
 }
 
+func splitFqdnIntoInstanceAndSidecar(fqdn string) (string, string, error) {
+	index := strings.LastIndexByte(fqdn, '.')
+
+	if index == -1 || index == len(fqdn)-1 {
+		return "", "", fmt.Errorf("fqdn not in expected format %s", fqdn)
+	}
+	return fqdn[0:], fqdn[index+1:], nil
+}
+
 // WaitForScrapeInstruction registers a client waiting for a scrape result
 func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, error) {
 	level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "fqdn", fqdn)
 
 	c.addKnownClient(fqdn)
 	// TODO: What if the client times out?
-	ch := c.getRequestChannel(fqdn)
+	instanceID, sidecarName, err := splitFqdnIntoInstanceAndSidecar(fqdn)
+	if err != nil {
+		level.Error(c.logger).Log("msg", "WaitForScrapeInstruction", err)
+		return nil, err
+	}
 
+	ch := c.getPerInstanceRequestChannel(instanceID, sidecarName)
 	// Following logic to null past request is not required,
 	// This existed based on the assumption that there will be just
 	// one client polling on a certain fqdn. we have other requirements with asg
 
 	//// exhaust existing poll request (eg. timeouted queues)
-	//select {
+	//select
 	//case ch <- nil:
 	//	//
 	//default:
@@ -220,6 +321,7 @@ func (c *Coordinator) gc() {
 			for k, ts := range c.known {
 				if ts.Before(limit) {
 					delete(c.known, k)
+					c.cleanUpPerInstanceRequestChannels(k)
 					deleted++
 				}
 			}

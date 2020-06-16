@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,17 +35,21 @@ const (
 	ConfigFilePath               = "config-client.yaml"
 	EnvFqdnKey                   = "CYRAL_PUSH_CLIENT_FQDN"
 	EnvProxyURL                  = "CYRAL_PUSH_CLIENT_PROXY_URL"
+	defaultMaxDelayBetweenPolls  = "0"
 )
 
 var (
-	myFqdn           = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).OverrideDefaultFromEnvar(EnvFqdnKey).String()
-	scrapeTargetHost = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
-	proxyURL         = kingpin.Flag("proxy-url", "Push proxy to talk to.").Default(ConfigPushClientDefaultValue).OverrideDefaultFromEnvar(EnvProxyURL).String()
-	caCertFile       = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
-	tlsCert          = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
-	tlsKey           = kingpin.Flag("tls.key", "<key> Private key file").String()
-	metricsAddr      = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
-	configFilePath   = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
+	myFqdn               = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).OverrideDefaultFromEnvar(EnvFqdnKey).String()
+	scrapeTargetHost     = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
+	proxyURL             = kingpin.Flag("proxy-url", "Push proxy to talk to.").Default(ConfigPushClientDefaultValue).OverrideDefaultFromEnvar(EnvProxyURL).String()
+	caCertFile           = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
+	tlsCert              = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
+	tlsKey               = kingpin.Flag("tls.key", "<key> Private key file").String()
+	metricsAddr          = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
+	configFilePath       = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
+	maxDelayBetweenPolls = kingpin.Flag("max-delay-between-polls", "Max delay in seconds between poll requests").Default(defaultMaxDelayBetweenPolls).Int64()
+	asgInstanceID        = kingpin.Flag("asg-instance-id", "Auto scaling group instance id").Default("").String()
+	useInstanceID        = kingpin.Flag("use-instance-id", "use instance id in poll requests").Default("true").Bool()
 )
 
 var (
@@ -154,7 +159,7 @@ func (c *Coordinator) doPush(resp *http.Response, origRequest *http.Request, cli
 	return nil
 }
 
-func loop(c Coordinator, t *http.Transport) error {
+func loop(fqdn string, c Coordinator, t *http.Transport) error {
 	client := &http.Client{Transport: t}
 	base, err := url.Parse(*proxyURL)
 	if err != nil {
@@ -167,7 +172,7 @@ func loop(c Coordinator, t *http.Transport) error {
 		return errors.New("error parsing url poll")
 	}
 	url := base.ResolveReference(u)
-	resp, err := client.Post(url.String(), "", strings.NewReader(*myFqdn))
+	resp, err := client.Post(url.String(), "", strings.NewReader(fqdn))
 	if err != nil {
 		level.Error(c.logger).Log("msg", "Error polling:", "err", err)
 		return errors.New("error polling")
@@ -202,13 +207,16 @@ type variationDelay struct {
 // newVariationDelay constructs variationDelay object with a range
 func newVariationDelay() variationDelay {
 	return variationDelay{
-		min: 5e8,  //500ms
-		max: 20e9, //20s
+		min: 5e8,                                                         //500ms
+		max: float64(time.Duration(*maxDelayBetweenPolls) * time.Second), //20s
 	}
 }
 
 // sleep will sleep for a random duration between
 func (v *variationDelay) sleep() {
+	if v.max < v.min {
+		return
+	}
 	d := math.Min(v.max, v.min+(rand.Float64()*v.max))
 	time.Sleep(time.Duration(d))
 }
@@ -237,12 +245,29 @@ func (d *decorrelatedJitter) sleep() {
 	time.Sleep(time.Duration(d.duration))
 }
 
+func getASGInstanceID() string {
+	if *asgInstanceID == "" {
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
+	} else {
+		return *asgInstanceID
+	}
+}
+
+// getFQDN returns concatenation of asg instance id and input fqdn
+func getFQDN() string {
+	if *useInstanceID {
+		return getASGInstanceID() + "." + *myFqdn
+	}
+	return *myFqdn
+}
+
 func main() {
 	promlogConfig := promlog.Config{}
 	flag.AddFlags(kingpin.CommandLine, &promlogConfig)
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 	logger := promlog.New(&promlogConfig)
+
 	coordinator := Coordinator{logger: logger}
 	if *proxyURL == "" {
 		level.Error(coordinator.logger).Log("msg", "--proxy-url flag must be specified.")
@@ -250,7 +275,7 @@ func main() {
 	}
 	// Make sure proxyURL ends with a single '/'
 	*proxyURL = strings.TrimRight(*proxyURL, "/") + "/"
-	level.Info(coordinator.logger).Log("msg", "URL and FQDN info", "proxy_url", *proxyURL, "fqdn", *myFqdn)
+	level.Info(coordinator.logger).Log("msg", "URL, InstanceID, FQDN info", "proxy_url", *proxyURL, "instanceID", getASGInstanceID(), "fqdn", *myFqdn)
 
 	tlsConfig := &tls.Config{}
 	if *tlsCert != "" {
@@ -306,8 +331,9 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	variationDelay := newVariationDelay()
 	jitter := newJitter()
+	fqdn := getFQDN()
 	for {
-		err := loop(coordinator, transport)
+		err := loop(fqdn, coordinator, transport)
 		if err != nil {
 			pollErrorCounter.Inc()
 			jitter.sleep()
