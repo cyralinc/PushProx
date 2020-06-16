@@ -67,23 +67,25 @@ func (c *Coordinator) genID() (string, error) {
 	return id.String(), err
 }
 
-func (c *Coordinator) getRandomlySelectedRequestChannel(fqdn string) (chan *http.Request, error) {
+// getRandomlySelectedRequestChannel randomly picks a channel for a service in fqdn
+func (c *Coordinator) getRandomlySelectedRequestChannel(sidecar string) (chan *http.Request, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.waiting[fqdn]; !ok {
+	if _, ok := c.waiting[sidecar]; !ok {
 		//no requests from prometheus yet
-		return nil, fmt.Errorf("no requests from prometheus yet for fqdn %s", fqdn)
+		return nil, fmt.Errorf("no requests from prometheus yet for sidecar %s", sidecar)
 	}
 	var serviceList []string
-	for s := range c.waiting[fqdn] {
+	for s := range c.waiting[sidecar] {
 		serviceList = append(serviceList, s)
 	}
 	r := rand.Intn(len(serviceList))
 	service := serviceList[r]
-	fmt.Printf("Picked service %s for fqdn %s channel %v\n", fqdn, service, c.waiting[fqdn][service])
-	return c.waiting[fqdn][service], nil
+	//fmt.Printf("Picked service %s for sidecar %s channel %v\n", sidecar, service, c.waiting[sidecar][service])
+	return c.waiting[sidecar][service], nil
 }
 
+// getPerServiceRequestChannel returns a channel given sidecar and service
 func (c *Coordinator) getPerServiceRequestChannel(sidecar string, service string) chan *http.Request {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -93,7 +95,7 @@ func (c *Coordinator) getPerServiceRequestChannel(sidecar string, service string
 	if _, ok := c.waiting[sidecar][service]; !ok {
 		c.waiting[sidecar][service] = make(chan *http.Request)
 	}
-	fmt.Printf("service: %s sidecar: %s c.waiting = %+v\n", service, sidecar, c.waiting)
+	//fmt.Printf("service: %s sidecar: %s c.waiting = %+v\n", service, sidecar, c.waiting)
 	return c.waiting[sidecar][service]
 }
 
@@ -138,11 +140,8 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 		r.Host = r.URL.Host
 	}
 
-	t := time.Now()
 	select {
 	case <-ctx.Done():
-		d := time.Now().Sub(t)
-		fmt.Printf("Timeout reached in duration = %v\n", d)
 		return nil, fmt.Errorf("Timeout reached for %q: %s", r.URL.String(), ctx.Err())
 	case c.getPerServiceRequestChannel(fqdn, service) <- r:
 	}
@@ -173,6 +172,11 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 		}
 	}
 	// TODO: What if the client times out?
+	// The receive below has to be non-blocking so that two poll
+	// requests from 2 instance block on the same channel.
+	// Even with a single instance, when poll requests don't align
+	// with prometheus requests, blocking on a single channel will
+	// result in timeout and hence lost scrapes
 	for {
 		ch, err := c.getRandomlySelectedRequestChannel(fqdn)
 		if err != nil {
@@ -180,6 +184,8 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 			return nil, err
 		}
 
+		// if a request is  available on the selected channel then return it
+		// if not after a delay select a different channel
 		if request, success := nonBlockingReceive(ch); success {
 			if request == nil {
 				return nil, fmt.Errorf("request is expired")
@@ -192,7 +198,7 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 				return request, nil
 			}
 		} else {
-			time.Sleep(5 * time.Millisecond)
+			time.Sleep(*channelPollDelay)
 		}
 	}
 }
