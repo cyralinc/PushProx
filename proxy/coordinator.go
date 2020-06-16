@@ -163,24 +163,36 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 	level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "fqdn", fqdn)
 
 	c.addKnownClient(fqdn)
-	// TODO: What if the client times out?
-	ch, err := c.getRandomlySelectedRequestChannel(fqdn)
-	if err != nil {
-		level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "error", err)
-		return nil, err
-	}
 
+	nonBlockingReceive := func(ch chan *http.Request) (*http.Request, bool) {
+		select {
+		case req := <-ch:
+			return req, true
+		default:
+			return nil, false
+		}
+	}
+	// TODO: What if the client times out?
 	for {
-		request := <-ch
-		if request == nil {
-			return nil, fmt.Errorf("request is expired")
+		ch, err := c.getRandomlySelectedRequestChannel(fqdn)
+		if err != nil {
+			level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "error", err)
+			return nil, err
 		}
 
-		select {
-		case <-request.Context().Done():
-			// Request has timed out, get another one.
-		default:
-			return request, nil
+		if request, success := nonBlockingReceive(ch); success {
+			if request == nil {
+				return nil, fmt.Errorf("request is expired")
+			}
+
+			select {
+			case <-request.Context().Done():
+				// Request has timed out, get another one.
+			default:
+				return request, nil
+			}
+		} else {
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 }
