@@ -80,6 +80,7 @@ func (c *Coordinator) getRandomlySelectedRequestChannel(fqdn string) (chan *http
 	}
 	r := rand.Intn(len(serviceList))
 	service := serviceList[r]
+	fmt.Printf("Picked service %s for fqdn %s channel %v\n", fqdn, service, c.waiting[fqdn][service])
 	return c.waiting[fqdn][service], nil
 }
 
@@ -92,6 +93,7 @@ func (c *Coordinator) getPerServiceRequestChannel(sidecar string, service string
 	if _, ok := c.waiting[sidecar][service]; !ok {
 		c.waiting[sidecar][service] = make(chan *http.Request)
 	}
+	fmt.Printf("service: %s sidecar: %s c.waiting = %+v\n", service, sidecar, c.waiting)
 	return c.waiting[sidecar][service]
 }
 
@@ -136,8 +138,11 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 		r.Host = r.URL.Host
 	}
 
+	t := time.Now()
 	select {
 	case <-ctx.Done():
+		d := time.Now().Sub(t)
+		fmt.Printf("Timeout reached in duration = %v\n", d)
 		return nil, fmt.Errorf("Timeout reached for %q: %s", r.URL.String(), ctx.Err())
 	case c.getPerServiceRequestChannel(fqdn, service) <- r:
 	}
