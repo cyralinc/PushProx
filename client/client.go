@@ -34,17 +34,19 @@ const (
 	ConfigFilePath               = "config-client.yaml"
 	EnvFqdnKey                   = "CYRAL_PUSH_CLIENT_FQDN"
 	EnvProxyURL                  = "CYRAL_PUSH_CLIENT_PROXY_URL"
+	defaultMaxDelayBetweenPolls  = "2"
 )
 
 var (
-	myFqdn           = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).OverrideDefaultFromEnvar(EnvFqdnKey).String()
-	scrapeTargetHost = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
-	proxyURL         = kingpin.Flag("proxy-url", "Push proxy to talk to.").Default(ConfigPushClientDefaultValue).OverrideDefaultFromEnvar(EnvProxyURL).String()
-	caCertFile       = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
-	tlsCert          = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
-	tlsKey           = kingpin.Flag("tls.key", "<key> Private key file").String()
-	metricsAddr      = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
-	configFilePath   = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
+	myFqdn               = kingpin.Flag("fqdn", "FQDN to register with").Default(fqdn.Get()).OverrideDefaultFromEnvar(EnvFqdnKey).String()
+	scrapeTargetHost     = kingpin.Flag("scrape-target-host", "The target host to scrape").Default("").String()
+	proxyURL             = kingpin.Flag("proxy-url", "Push proxy to talk to.").Default(ConfigPushClientDefaultValue).OverrideDefaultFromEnvar(EnvProxyURL).String()
+	caCertFile           = kingpin.Flag("tls.cacert", "<file> CA certificate to verify peer against").String()
+	tlsCert              = kingpin.Flag("tls.cert", "<cert> Client certificate file").String()
+	tlsKey               = kingpin.Flag("tls.key", "<key> Private key file").String()
+	metricsAddr          = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
+	configFilePath       = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
+	maxDelayBetweenPolls = kingpin.Flag("max-delay-between-polls", "Max delay in seconds between poll requests").Default(defaultMaxDelayBetweenPolls).Int64()
 )
 
 var (
@@ -216,13 +218,16 @@ type variationDelay struct {
 // newVariationDelay constructs variationDelay object with a range
 func newVariationDelay() variationDelay {
 	return variationDelay{
-		min: 5e8,  //500ms
-		max: 20e9, //20s
+		min: 5e8, //500ms
+		max: float64(time.Duration(*maxDelayBetweenPolls) * time.Second),
 	}
 }
 
 // sleep will sleep for a random duration between
 func (v *variationDelay) sleep() {
+	if v.max < v.min {
+		return
+	}
 	d := math.Min(v.max, v.min+(rand.Float64()*v.max))
 	time.Sleep(time.Duration(d))
 }

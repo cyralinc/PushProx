@@ -36,6 +36,7 @@ var (
 	maxScrapeTimeout     = kingpin.Flag("scrape.max-timeout", "Any scrape with a timeout higher than this will have to be clamped to this.").Default("5m").Duration()
 	defaultScrapeTimeout = kingpin.Flag("scrape.default-timeout", "If a scrape lacks a timeout, use this value.").Default("15s").Duration()
 	configFilePath       = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
+	channelPollDelay     = kingpin.Flag("scrape.channel-poll-delay", "If a scrape lacks a timeout, use this value.").Default("5ms").Duration()
 )
 
 var (
