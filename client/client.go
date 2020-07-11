@@ -18,8 +18,11 @@ import (
 	"strings"
 	"time"
 
+	b64 "encoding/base64"
+
 	"github.com/ShowMax/go-fqdn"
 	"github.com/cyralinc/pushprox/util"
+	"github.com/cyralinc/wrapper-utils/iplookup"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,7 +37,8 @@ const (
 	ConfigFilePath               = "config-client.yaml"
 	EnvFqdnKey                   = "CYRAL_PUSH_CLIENT_FQDN"
 	EnvProxyURL                  = "CYRAL_PUSH_CLIENT_PROXY_URL"
-	defaultMaxDelayBetweenPolls  = "2"
+	EnvASGInstanceID             = "CYRAL_PUSH_CLIENT_ASG_INSTANCE_ID"
+	defaultMaxDelayBetweenPolls  = "0"
 )
 
 var (
@@ -47,6 +51,8 @@ var (
 	metricsAddr          = kingpin.Flag("metrics-addr", "Serve Prometheus metrics at this address").Default(":9369").String()
 	configFilePath       = kingpin.Flag("config-file", "Config file path (Unused)").Default(ConfigFilePath).String()
 	maxDelayBetweenPolls = kingpin.Flag("max-delay-between-polls", "Max delay in seconds between poll requests").Default(defaultMaxDelayBetweenPolls).Int64()
+	asgInstanceID        = kingpin.Flag("asg-instance-id", "Auto scaling group instance id").Default("").OverrideDefaultFromEnvar(EnvASGInstanceID).String()
+	useInstanceID        = kingpin.Flag("use-instance-id", "use instance id in poll requests").Default("true").Bool()
 )
 
 var (
@@ -77,6 +83,10 @@ func init() {
 // Coordinator for scrape requests and responses
 type Coordinator struct {
 	logger log.Logger
+}
+
+func getIDAsB64(asgID string) string {
+	return b64.StdEncoding.EncodeToString([]byte(asgID))
 }
 
 func (c *Coordinator) doScrape(request *http.Request, client *http.Client) {
@@ -156,7 +166,7 @@ func (c *Coordinator) doPush(resp *http.Response, origRequest *http.Request, cli
 	return nil
 }
 
-func loop(c Coordinator, t *http.Transport) error {
+func loop(fqdn string, c Coordinator, t *http.Transport) error {
 	client := &http.Client{Transport: t}
 	base, err := url.Parse(*proxyURL)
 	if err != nil {
@@ -169,7 +179,7 @@ func loop(c Coordinator, t *http.Transport) error {
 		return errors.New("error parsing url poll")
 	}
 	url := base.ResolveReference(u)
-	resp, err := client.Post(url.String(), "", strings.NewReader(*myFqdn))
+	resp, err := client.Post(url.String(), "", strings.NewReader(fqdn))
 	if err != nil {
 		level.Error(c.logger).Log("msg", "Error polling:", "err", err)
 		return errors.New("error polling")
@@ -204,8 +214,8 @@ type variationDelay struct {
 // newVariationDelay constructs variationDelay object with a range
 func newVariationDelay() variationDelay {
 	return variationDelay{
-		min: 5e8, //500ms
-		max: float64(time.Duration(*maxDelayBetweenPolls) * time.Second),
+		min: 5e8,                                                         //500ms
+		max: float64(time.Duration(*maxDelayBetweenPolls) * time.Second), //20s
 	}
 }
 
@@ -242,12 +252,33 @@ func (d *decorrelatedJitter) sleep() {
 	time.Sleep(time.Duration(d.duration))
 }
 
+func getASGInstanceID() string {
+	if *asgInstanceID == "" {
+		return iplookup.FindMyIPV4()
+	} else {
+		return *asgInstanceID
+	}
+}
+
+func getASGInstanceIDInBase64() string {
+	return getIDAsB64(getASGInstanceID())
+}
+
+// getFQDN returns concatenation of asg instance id and input fqdn
+func getFQDN() string {
+	if *useInstanceID {
+		return getASGInstanceIDInBase64() + "." + *myFqdn
+	}
+	return *myFqdn
+}
+
 func main() {
 	promlogConfig := promlog.Config{}
 	flag.AddFlags(kingpin.CommandLine, &promlogConfig)
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 	logger := promlog.New(&promlogConfig)
+
 	coordinator := Coordinator{logger: logger}
 	if *proxyURL == "" {
 		level.Error(coordinator.logger).Log("msg", "--proxy-url flag must be specified.")
@@ -255,7 +286,8 @@ func main() {
 	}
 	// Make sure proxyURL ends with a single '/'
 	*proxyURL = strings.TrimRight(*proxyURL, "/") + "/"
-	level.Info(coordinator.logger).Log("msg", "URL and FQDN info", "proxy_url", *proxyURL, "fqdn", *myFqdn)
+	level.Info(coordinator.logger).Log("msg", "URL, InstanceID, FQDN info", "proxy_url", *proxyURL,
+		"instanceID", getASGInstanceID(), "instanceIDBas64", getASGInstanceIDInBase64(), "fqdn", *myFqdn)
 
 	tlsConfig := &tls.Config{}
 	if *tlsCert != "" {
@@ -311,8 +343,9 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	variationDelay := newVariationDelay()
 	jitter := newJitter()
+	fqdn := getFQDN()
 	for {
-		err := loop(coordinator, transport)
+		err := loop(fqdn, coordinator, transport)
 		if err != nil {
 			pollErrorCounter.Inc()
 			jitter.sleep()

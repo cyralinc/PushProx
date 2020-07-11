@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -39,7 +38,7 @@ type Coordinator struct {
 	mu sync.Mutex
 
 	// Clients waiting for a scrape.
-	waiting map[string]map[string]chan *http.Request
+	waiting map[string]chan *http.Request
 	// Responses from clients.
 	responses map[string]chan *http.Response
 	// Clients we know about and when they last contacted us.
@@ -51,7 +50,7 @@ type Coordinator struct {
 // NewCoordinator initiates the coordinator and starts the client cleanup routine
 func NewCoordinator(logger log.Logger) (*Coordinator, error) {
 	c := &Coordinator{
-		waiting:   map[string]map[string]chan *http.Request{},
+		waiting:   map[string]chan *http.Request{},
 		responses: map[string]chan *http.Response{},
 		known:     map[string]time.Time{},
 		logger:    logger,
@@ -67,36 +66,15 @@ func (c *Coordinator) genID() (string, error) {
 	return id.String(), err
 }
 
-// getRandomlySelectedRequestChannel randomly picks a channel for a service in fqdn
-func (c *Coordinator) getRandomlySelectedRequestChannel(sidecar string) (chan *http.Request, error) {
+func (c *Coordinator) getRequestChannel(fqdn string) chan *http.Request {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.waiting[sidecar]; !ok {
-		//no requests from prometheus yet
-		return nil, fmt.Errorf("no requests from prometheus yet for sidecar %s", sidecar)
+	ch, ok := c.waiting[fqdn]
+	if !ok {
+		ch = make(chan *http.Request)
+		c.waiting[fqdn] = ch
 	}
-	var serviceList []string
-	for s := range c.waiting[sidecar] {
-		serviceList = append(serviceList, s)
-	}
-	r := rand.Intn(len(serviceList))
-	service := serviceList[r]
-	//fmt.Printf("Picked service %s for sidecar %s channel %v\n", sidecar, service, c.waiting[sidecar][service])
-	return c.waiting[sidecar][service], nil
-}
-
-// getPerServiceRequestChannel returns a channel given sidecar and service
-func (c *Coordinator) getPerServiceRequestChannel(sidecar string, service string) chan *http.Request {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.waiting[sidecar]; !ok {
-		c.waiting[sidecar] = make(map[string]chan *http.Request)
-	}
-	if _, ok := c.waiting[sidecar][service]; !ok {
-		c.waiting[sidecar][service] = make(chan *http.Request)
-	}
-	//fmt.Printf("service: %s sidecar: %s c.waiting = %+v\n", service, sidecar, c.waiting)
-	return c.waiting[sidecar][service]
+	return ch
 }
 
 func (c *Coordinator) getResponseChannel(id string) chan *http.Response {
@@ -126,24 +104,22 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	level.Info(c.logger).Log("msg", "DoScrape", "scrape_id", id, "url", r.URL.String())
 	r.Header.Add("Id", id)
 
-	//PC: URL.Hostname() will be of form sevicename.wrappername
-	//split this and use the wrappername for request channel
+	//URL.Hostname() will be of form sevicename.asgInstanceID.wrappername
+	//split this and use the asgInstanceID.wrappername for request channel
 	//modify request URL to servicename
 	serviceWrapper := r.URL.Hostname()
 	fqdn := serviceWrapper
-	service := ""
-	b := strings.Split(serviceWrapper, ".")
+	b := strings.SplitN(serviceWrapper, ".", 2)
 	if len(b) == 2 {
-		service = b[0]
 		fqdn = b[1]
-		r.URL = util.ReplaceUrlHost(r.URL, service)
+		r.URL = util.ReplaceUrlHost(r.URL, b[0])
 		r.Host = r.URL.Host
 	}
 
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("Timeout reached for %q: %s", r.URL.String(), ctx.Err())
-	case c.getPerServiceRequestChannel(fqdn, service) <- r:
+	case c.getRequestChannel(fqdn) <- r:
 	}
 
 	respCh := c.getResponseChannel(id)
@@ -162,43 +138,28 @@ func (c *Coordinator) WaitForScrapeInstruction(fqdn string) (*http.Request, erro
 	level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "fqdn", fqdn)
 
 	c.addKnownClient(fqdn)
-
-	nonBlockingReceive := func(ch chan *http.Request) (*http.Request, bool) {
-		select {
-		case req := <-ch:
-			return req, true
-		default:
-			return nil, false
-		}
-	}
 	// TODO: What if the client times out?
-	// The receive below has to be non-blocking so that two poll
-	// requests from 2 instance block on the same channel.
-	// Even with a single instance, when poll requests don't align
-	// with prometheus requests, blocking on a single channel will
-	// result in timeout and hence lost scrapes
+	ch := c.getRequestChannel(fqdn)
+
+	//// exhaust existing poll request (eg. timeouted queues)
+	select {
+	case ch <- nil:
+		//
+	default:
+		break
+	}
+
 	for {
-		ch, err := c.getRandomlySelectedRequestChannel(fqdn)
-		if err != nil {
-			level.Info(c.logger).Log("msg", "WaitForScrapeInstruction", "error", err)
-			return nil, err
+		request := <-ch
+		if request == nil {
+			return nil, fmt.Errorf("request is expired")
 		}
 
-		// if a request is  available on the selected channel then return it
-		// if not after a delay select a different channel
-		if request, success := nonBlockingReceive(ch); success {
-			if request == nil {
-				return nil, fmt.Errorf("request is expired")
-			}
-
-			select {
-			case <-request.Context().Done():
-				// Request has timed out, get another one.
-			default:
-				return request, nil
-			}
-		} else {
-			time.Sleep(*channelPollDelay)
+		select {
+		case <-request.Context().Done():
+			// Request has timed out, get another one.
+		default:
+			return request, nil
 		}
 	}
 }
