@@ -117,8 +117,8 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	b := strings.Split(serviceWrapper, ".")
 	if len(b) >= 3 {
 		// fqdn will be asgInstanceID.wrapperName (last 2 elements of list)
-		fqdn = strings.Join(b[len(b)-2:len(b)], ".")
-		// url will be serviceName, if service name had dots in it then we join
+		fqdn = strings.Join(b[len(b)-2:], ".")
+		// if the serviceName contained dots removed by the earlier split, we join with dots to bring them back
 		url := strings.Join(b[:len(b)-2], ".")
 		r.URL = util.ReplaceUrlHost(r.URL, url)
 		r.Host = r.URL.Host
