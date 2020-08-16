@@ -123,14 +123,14 @@ func (c *Coordinator) doScrape(request *http.Request, client *http.Client) {
 		level.Info(logger).Log("msg", "Pushed failed scrape response")
 		return
 	}
-	level.Info(logger).Log("msg", "Retrieved scrape response")
+	level.Debug(logger).Log("msg", "Retrieved scrape response")
 	err = c.doPush(scrapeResp, request, client)
 	if err != nil {
 		pushErrorCounter.Inc()
 		level.Warn(logger).Log("msg", "Failed to push scrape response:", "err", err)
 		return
 	}
-	level.Info(logger).Log("msg", "Pushed scrape result")
+	level.Debug(logger).Log("msg", "Pushed scrape result")
 }
 
 // Report the result of the scrape back up to the proxy.
@@ -191,7 +191,7 @@ func loop(fqdn string, c Coordinator, t *http.Transport) error {
 		level.Error(c.logger).Log("msg", "Error reading request:", "err", err)
 		return errors.New("error reading request")
 	}
-	level.Info(c.logger).Log("msg", "Got scrape request", "scrape_id", request.Header.Get("id"), "url", request.URL)
+	level.Debug(c.logger).Log("msg", "Got scrape request", "scrape_id", request.Header.Get("id"), "url", request.URL)
 
 	request.RequestURI = ""
 
@@ -278,6 +278,8 @@ func main() {
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 	logger := promlog.New(&promlogConfig)
+
+	//level.AllowDebug()
 
 	coordinator := Coordinator{logger: logger}
 	if *proxyURL == "" {
