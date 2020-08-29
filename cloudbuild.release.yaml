@@ -90,8 +90,13 @@ steps:
 
 # Build container image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME', '.']
+  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME', '--tag=gcr.io/cyralinc/cyral-push-proxy:$TAG_NAME', '.']
   id: 'docker-build'
+
+# Build container image for Aptible
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-client-aptible:$TAG_NAME', '--tag=gcr.io/cyralinc/cyral-push-client-aptible:$TAG_NAME', '.']
+  id: 'docker-build-aptible'
 
 # Build client binary for rpm and debian
 - name: gcr.io/cloud-builders/go:debian
@@ -295,4 +300,8 @@ artifacts:
       - "/workspace/bin/cyral-push-client.$TAG_NAME.deb"
       - "/workspace/bin/cyral-push-proxy.$TAG_NAME.rpm"
       - "/workspace/bin/cyral-push-proxy.$TAG_NAME.deb"
-images: ['gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME']
+images: 
+  - 'gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME'
+  - 'gcr.io/$PROJECT_ID/cyral-push-client-aptible:$TAG_NAME'
+  - 'gcr.io/cyralinc/cyral-push-proxy:$TAG_NAME'
+  - 'gcr.io/cyralinc/cyral-push-client-aptible:$TAG_NAME'
