@@ -90,7 +90,7 @@ steps:
 
 # Build container image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME', '.']
+  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-proxy:$TAG_NAME', '--tag=gcr.io/cyralinc/cyral-push-proxy:$TAG_NAME', '.']
   id: 'docker-build'
 
 # Build container image for Aptible
