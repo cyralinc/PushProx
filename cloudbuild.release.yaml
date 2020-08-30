@@ -95,7 +95,7 @@ steps:
 
 # Build container image for Aptible
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '--tag=gcr.io/$PROJECT_ID/cyral-push-client-aptible:$TAG_NAME', '--tag=gcr.io/cyralinc/cyral-push-client-aptible:$TAG_NAME', '.']
+  args: ['build', '-f=Dockerfile.aptible', '--tag=gcr.io/$PROJECT_ID/cyral-push-client-aptible:$TAG_NAME', '--tag=gcr.io/cyralinc/cyral-push-client-aptible:$TAG_NAME', '.']
   id: 'docker-build-aptible'
 
 # Build client binary for rpm and debian
