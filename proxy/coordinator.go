@@ -101,7 +101,7 @@ func (c *Coordinator) DoScrape(ctx context.Context, r *http.Request) (*http.Resp
 	if err != nil {
 		return nil, err
 	}
-	level.Info(c.logger).Log("msg", "DoScrape", "scrape_id", id, "url", r.URL.String())
+	level.Debug(c.logger).Log("msg", "DoScrape", "scrape_id", id, "url", r.URL.String())
 	r.Header.Add("Id", id)
 
 	//URL.Hostname() will be of form sevicename.asgInstanceID.wrappername
